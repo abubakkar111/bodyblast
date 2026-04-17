@@ -2,7 +2,6 @@ const express = require('express');
 const router = express.Router();
 const multer = require('multer');
 const path = require('path');
-const fs = require('fs');
 const Product = require('../models/Product');
 
 // File filter for images only
@@ -14,17 +13,14 @@ const fileFilter = (req, file, cb) => {
   if (extname && mimetype) {
     return cb(null, true);
   } else {
-    cb('Error: Images only! (jpeg, jpg, png, webp)');
+    cb(new Error('Images only! (jpeg, jpg, png, webp)'));
   }
 };
 
-// ✅ HELPER FUNCTION: Get full image URL (Updated for Cloudinary)
+// ✅ HELPER FUNCTION: Get full image URL
 const getFullImageUrl = (req, imagePath) => {
   if (!imagePath) return '';
-  // Cloudinary URLs are already full URLs, return as-is
   if (imagePath.startsWith('http')) return imagePath;
-  
-  // Fallback for old local images (if any exist in DB)
   const cleanPath = imagePath.replace(/^\/+/, '');
   return `${req.protocol}://${req.get('host')}/${cleanPath}`;
 };
@@ -41,8 +37,6 @@ router.get('/', async (req, res) => {
 
     const products = await Product.find(query).sort({ createdAt: -1 });
     
-    // ✅ Images now already have full Cloudinary URLs, no transformation needed
-    // But we keep the helper for backward compatibility with old data
     const productsWithFullUrls = products.map(product => {
       const productObj = product.toObject();
       productObj.image = getFullImageUrl(req, productObj.image);
@@ -73,50 +67,13 @@ router.get('/:id', async (req, res) => {
 });
 
 // POST create product with image upload
-router.post('/', (req, res, next) => {
-  // ✅ CLOUDINARY: Use storage from app locals (set in server.js)
+router.post('/', (req, res) => {
   const storage = req.app.locals.uploadStorage;
-  const upload = multer({ 
-    storage: storage,
-    limits: { fileSize: 5000000 }, // 5MB limit
-    fileFilter: fileFilter
-  }).single('image');
-
-  upload(req, res, async (err) => {
-    if (err) {
-      return res.status(400).json({ success: false, message: err.message });
-    }
-
-    try {
-      const { name, category, description, originalPrice, discountedPrice, whatsappNumber } = req.body;
-
-      // ✅ CLOUDINARY: req.file.path now contains the Cloudinary URL directly
-      const imageUrl = req.file ? req.file.path : '';
-
-      const product = new Product({
-        name,
-        category,
-        description,
-        originalPrice: parseFloat(originalPrice),
-        discountedPrice: parseFloat(discountedPrice),
-        whatsappNumber,
-        image: imageUrl // ✅ Stores: https://res.cloudinary.com/.../image.jpg
-      });
-
-      await product.save();
-      res.status(201).json({ success: true, message: 'Product added successfully', product });
-    } catch (error) {
-      res.status(500).json({ success: false, message: error.message });
-    }
-  });
-});
-
-// ✅ PUT UPDATE PRODUCT - EDIT FEATURE
-router.put('/:id', (req, res, next) => {
-  // ✅ CLOUDINARY: Use storage from app locals
-  const storage = req.app.locals.uploadStorage;
-  const cloudinary = req.app.locals.cloudinary;
   
+  if (!storage) {
+    return res.status(500).json({ success: false, message: 'Storage not configured' });
+  }
+
   const upload = multer({ 
     storage: storage,
     limits: { fileSize: 5000000 },
@@ -125,69 +82,124 @@ router.put('/:id', (req, res, next) => {
 
   upload(req, res, async (err) => {
     if (err) {
+      console.error('Upload error:', err);
       return res.status(400).json({ success: false, message: err.message });
     }
 
     try {
       const { name, category, description, originalPrice, discountedPrice, whatsappNumber } = req.body;
 
-      // Build update object
-      const updateData = {
+      // Validation
+      if (!name || !category || !description || !originalPrice || !discountedPrice) {
+        return res.status(400).json({ success: false, message: 'All fields are required' });
+      }
+
+      if (!req.file) {
+        return res.status(400).json({ success: false, message: 'Image is required' });
+      }
+
+      const imageUrl = req.file.path;
+
+      const product = new Product({
         name,
         category,
         description,
-        originalPrice: parseFloat(originalPrice),
-        discountedPrice: parseFloat(discountedPrice),
-        whatsappNumber
-      };
-
-      // ✅ If new image uploaded, handle Cloudinary
-      if (req.file) {
-        // Get old product to delete previous image from Cloudinary
-        const oldProduct = await Product.findById(req.params.id);
-        
-        if (oldProduct && oldProduct.image && oldProduct.image.includes('cloudinary')) {
-          try {
-            // Extract public_id from Cloudinary URL
-            // URL format: https://res.cloudinary.com/cloud_name/image/upload/v1234567890/folder/public_id.jpg
-            const urlParts = oldProduct.image.split('/');
-            const filenameWithExt = urlParts[urlParts.length - 1]; // public_id.jpg
-            const publicId = filenameWithExt.split('.')[0]; // public_id
-            
-            // Delete from Cloudinary
-            await cloudinary.uploader.destroy(`bodyblast-products/${publicId}`);
-            console.log('🗑️ Deleted old image from Cloudinary:', publicId);
-          } catch (err) {
-            console.error('Error deleting old image from Cloudinary:', err);
-            // Continue even if delete fails
-          }
-        }
-        
-        // Set new image URL from Cloudinary
-        updateData.image = req.file.path;
-      }
-
-      // ✅ Update product in database
-      const product = await Product.findByIdAndUpdate(
-        req.params.id,
-        updateData,
-        { new: true, runValidators: true }
-      );
-
-      if (!product) {
-        return res.status(404).json({ success: false, message: 'Product not found' });
-      }
-
-      res.json({ 
-        success: true, 
-        message: 'Product updated successfully', 
-        product 
+        originalPrice: parseFloat(originalPrice) || 0,
+        discountedPrice: parseFloat(discountedPrice) || 0,
+        whatsappNumber: whatsappNumber || '923058666797',
+        image: imageUrl
       });
+
+      await product.save();
+      res.status(201).json({ success: true, message: 'Product added successfully', product });
     } catch (error) {
-      console.error('Update error:', error);
+      console.error('Create error:', error);
       res.status(500).json({ success: false, message: error.message });
     }
   });
+});
+
+// ✅ PUT UPDATE PRODUCT - FIXED VERSION
+router.put('/:id', async (req, res) => {
+  try {
+    const storage = req.app.locals.uploadStorage;
+    const cloudinary = req.app.locals.cloudinary;
+    
+    if (!storage) {
+      return res.status(500).json({ success: false, message: 'Storage not configured' });
+    }
+
+    // Use multer as a promise to handle file upload optionally
+    const upload = multer({ 
+      storage: storage,
+      limits: { fileSize: 5000000 },
+      fileFilter: fileFilter
+    }).single('image');
+
+    // Convert multer callback to promise
+    await new Promise((resolve, reject) => {
+      upload(req, res, (err) => {
+        if (err) reject(err);
+        else resolve();
+      });
+    });
+
+    const { name, category, description, originalPrice, discountedPrice, whatsappNumber } = req.body;
+
+    // Validation
+    if (!name || !category || !description || !originalPrice || !discountedPrice) {
+      return res.status(400).json({ success: false, message: 'All fields are required' });
+    }
+
+    // Build update object
+    const updateData = {
+      name,
+      category,
+      description,
+      originalPrice: parseFloat(originalPrice) || 0,
+      discountedPrice: parseFloat(discountedPrice) || 0,
+      whatsappNumber: whatsappNumber || '923058666797'
+    };
+
+    // If new image uploaded, handle Cloudinary
+    if (req.file) {
+      // Get old product to delete previous image
+      const oldProduct = await Product.findById(req.params.id);
+      
+      if (oldProduct && oldProduct.image && oldProduct.image.includes('cloudinary')) {
+        try {
+          const urlParts = oldProduct.image.split('/');
+          const filenameWithExt = urlParts[urlParts.length - 1];
+          const publicId = filenameWithExt.split('.')[0];
+          await cloudinary.uploader.destroy(`bodyblast-products/${publicId}`);
+          console.log('🗑️ Deleted old image from Cloudinary:', publicId);
+        } catch (err) {
+          console.error('Error deleting old image:', err);
+        }
+      }
+      
+      updateData.image = req.file.path;
+    }
+
+    const product = await Product.findByIdAndUpdate(
+      req.params.id,
+      updateData,
+      { new: true, runValidators: true }
+    );
+
+    if (!product) {
+      return res.status(404).json({ success: false, message: 'Product not found' });
+    }
+
+    res.json({ 
+      success: true, 
+      message: 'Product updated successfully', 
+      product 
+    });
+  } catch (error) {
+    console.error('Update error:', error);
+    res.status(400).json({ success: false, message: error.message });
+  }
 });
 
 // DELETE product
@@ -200,18 +212,16 @@ router.delete('/:id', async (req, res) => {
       return res.status(404).json({ success: false, message: 'Product not found' });
     }
 
-    // ✅ CLOUDINARY: Delete image from Cloudinary when deleting product
+    // Delete image from Cloudinary
     if (product.image && product.image.includes('cloudinary')) {
       try {
-        // Extract public_id from Cloudinary URL
         const urlParts = product.image.split('/');
         const filenameWithExt = urlParts[urlParts.length - 1];
         const publicId = filenameWithExt.split('.')[0];
-        
         await cloudinary.uploader.destroy(`bodyblast-products/${publicId}`);
         console.log('🗑️ Deleted image from Cloudinary:', publicId);
       } catch (err) {
-        console.error('Error deleting image from Cloudinary:', err);
+        console.error('Error deleting image:', err);
       }
     }
 

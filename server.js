@@ -12,10 +12,6 @@ const { CloudinaryStorage } = require('multer-storage-cloudinary');
 
 const app = express();
 
-// Import models
-const Review = require('./models/Review');
-const Order = require('./models/Order');
-
 // Cloudinary config
 cloudinary.config({
   cloud_name: process.env.CLOUDINARY_CLOUD_NAME,
@@ -99,94 +95,6 @@ app.get('/health', async (req, res) => {
 });
 
 // ============================================
-// REVIEWS ROUTES
-// ============================================
-
-// Get all reviews
-app.get('/api/reviews', async (req, res) => {
-  try {
-    const reviews = await Review.find().sort({ date: -1 }).limit(50);
-    res.json({ success: true, reviews });
-  } catch (error) {
-    res.status(500).json({ success: false, message: error.message });
-  }
-});
-
-// Add new review
-app.post('/api/reviews', async (req, res) => {
-  try {
-    const review = new Review(req.body);
-    await review.save();
-    res.status(201).json({ success: true, review });
-  } catch (error) {
-    res.status(500).json({ success: false, message: error.message });
-  }
-});
-
-// Delete review (admin only)
-app.delete('/api/reviews/:id', async (req, res) => {
-  try {
-    await Review.findByIdAndDelete(req.params.id);
-    res.json({ success: true, message: 'Review deleted' });
-  } catch (error) {
-    res.status(500).json({ success: false, message: error.message });
-  }
-});
-
-// ============================================
-// ORDERS/SALES ROUTES
-// ============================================
-
-// Get all orders and stats
-app.get('/api/orders', async (req, res) => {
-  try {
-    const orders = await Order.find().sort({ createdAt: -1 });
-    
-    const stats = {
-      totalSales: orders.filter(o => o.status === 'completed').length,
-      totalRevenue: orders.filter(o => o.status === 'completed').reduce((sum, o) => sum + o.productPrice, 0),
-      pendingOrders: orders.filter(o => o.status === 'pending').length,
-      totalOrders: orders.length
-    };
-    
-    res.json({ success: true, orders, stats });
-  } catch (error) {
-    res.status(500).json({ success: false, message: error.message });
-  }
-});
-
-// Create new order (when customer clicks Order)
-app.post('/api/orders', async (req, res) => {
-  try {
-    const order = new Order(req.body);
-    await order.save();
-    res.status(201).json({ success: true, order });
-  } catch (error) {
-    res.status(500).json({ success: false, message: error.message });
-  }
-});
-
-// Update order status (admin)
-app.put('/api/orders/:id', async (req, res) => {
-  try {
-    const order = await Order.findByIdAndUpdate(req.params.id, req.body, { new: true });
-    res.json({ success: true, order });
-  } catch (error) {
-    res.status(500).json({ success: false, message: error.message });
-  }
-});
-
-// Delete order (admin)
-app.delete('/api/orders/:id', async (req, res) => {
-  try {
-    await Order.findByIdAndDelete(req.params.id);
-    res.json({ success: true, message: 'Order deleted' });
-  } catch (error) {
-    res.status(500).json({ success: false, message: error.message });
-  }
-});
-
-// ============================================
 // PRODUCT ROUTES
 // ============================================
 
@@ -198,8 +106,6 @@ app.get('/', (req, res) => {
     message: 'Bodyblast API Running!',
     endpoints: [
       '/api/products',
-      '/api/reviews',
-      '/api/orders',
       '/health',
       '/ping'
     ]
@@ -221,5 +127,4 @@ const PORT = process.env.PORT || 5000;
 app.listen(PORT, () => {
   console.log(`🚀 Server running on port ${PORT}`);
   console.log(`☁️  Cloudinary configured`);
-  console.log(`📊 Reviews & Orders tracking enabled`);
 });
